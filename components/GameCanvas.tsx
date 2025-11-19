@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import { GameStatus, LevelConfig, Player, GameObject, Vector2, Particle, Projectile } from '../types';
 import { 
   GRAVITY, FRICTION, AIR_FRICTION, JUMP_FORCE, 
@@ -105,7 +105,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
   // Sprite Sheet Generation
   useEffect(() => {
     const generatePrairieDogSpriteSheet = () => {
-      const CELL_SIZE = 128; // Increased resolution for sharpness (was 64)
+      const CELL_SIZE = 128; // Increased resolution for sharpness
       const sCanvas = document.createElement('canvas');
       sCanvas.width = CELL_SIZE * 4; 
       sCanvas.height = CELL_SIZE * 4; 
@@ -1467,4 +1467,37 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
                             className={`w-14 h-14 backdrop-blur-md rounded-full border-2 flex items-center justify-center text-2xl shadow-lg transition-all ${
                                 dashCooldownRef.current <= 0 
                                 ? 'bg-cyan-500/40 border-cyan-300/50 active:bg-cyan-500/60 text-white' 
-                                : 'bg-gray-500/40 border-gray-500/5
+                                : 'bg-gray-500/40 border-gray-500/50 text-gray-400 cursor-not-allowed'
+                            }`}
+                            onTouchStart={(e) => { 
+                                e.preventDefault(); 
+                                if (dashCooldownRef.current <= 0) inputRef.current.dashPressed = true; 
+                            }}
+                        >
+                           <Wind weight="fill" />
+                        </button>
+
+                        {/* Jump Btn */}
+                        <button 
+                            className="w-20 h-20 bg-amber-500/80 backdrop-blur-md rounded-full border-4 border-amber-300/50 active:bg-amber-600 shadow-xl flex items-center justify-center text-4xl"
+                            onTouchStart={(e) => { e.preventDefault(); inputRef.current.jumpPressed = true; inputRef.current.up = true; }}
+                            onTouchEnd={(e) => { e.preventDefault(); inputRef.current.up = false; }}
+                        >
+                           ⬆️
+                        </button>
+                    </div>
+                </div>
+            </div>
+        )}
+        
+        {/* Orientation Hint */}
+        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 pointer-events-none opacity-0 transition-opacity duration-1000 hidden portrait:flex flex-col items-center text-white/50 bg-black/40 p-4 rounded-xl backdrop-blur-sm animate-pulse">
+             <DeviceMobile size={48} className="mb-2 rotate-90" />
+             <span className="text-sm font-bold">Rotate for best view</span>
+        </div>
+
+    </div>
+  );
+};
+
+export default React.memo(GameCanvas);
