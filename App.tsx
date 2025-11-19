@@ -1,8 +1,11 @@
+
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import GameCanvas from './components/GameCanvas';
 import { generateLevel } from './services/geminiService';
-import { GameStatus, LevelConfig } from './types';
-import { CircleNotch, Trophy, Skull, Play, Pause, Star, Timer, Coin, House, ArrowCounterClockwise } from 'phosphor-react';
+import { GameStatus, LevelConfig, LeaderboardEntry } from './types';
+import { CircleNotch, Trophy, Skull, Play, Pause, Star, Timer, Coin, House, ArrowCounterClockwise, FloppyDisk } from 'phosphor-react';
+import { initAudio } from './services/audioService';
+import { MAX_LEADERBOARD_ENTRIES } from './constants';
 
 const App: React.FC = () => {
   const [status, setStatus] = useState<GameStatus>(GameStatus.MENU);
@@ -22,17 +25,36 @@ const App: React.FC = () => {
     totalRunScore: 0
   });
 
+  // Leaderboard State
+  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
+  const [isLeaderboardQualifying, setIsLeaderboardQualifying] = useState(false);
+  const [playerName, setPlayerName] = useState('');
+
   const startTimeRef = useRef<number>(0);
   const totalPausedTimeRef = useRef<number>(0);
   const pauseStartRef = useRef<number>(0);
 
-  // Load High Score
+  // Load High Score & Leaderboard
   useEffect(() => {
-    const saved = localStorage.getItem('prairie_highscore');
-    if (saved) setHighScore(parseInt(saved, 10));
+    const savedScore = localStorage.getItem('prairie_highscore');
+    if (savedScore) setHighScore(parseInt(savedScore, 10));
+
+    try {
+        const savedBoard = localStorage.getItem('prairie_leaderboard');
+        if (savedBoard) {
+            const parsed = JSON.parse(savedBoard) as LeaderboardEntry[];
+            setLeaderboard(parsed);
+            // Sync high score just in case
+            if (parsed.length > 0 && parsed[0].score > (parseInt(savedScore || '0', 10))) {
+                setHighScore(parsed[0].score);
+            }
+        }
+    } catch (e) {
+        console.error("Failed to load leaderboard", e);
+    }
   }, []);
 
-  // Save High Score
+  // Save High Score (Legacy simple persistence, plus Leaderboard sync)
   useEffect(() => {
     if (score > highScore) {
       setHighScore(score);
@@ -50,9 +72,12 @@ const App: React.FC = () => {
   }, []);
 
   const startGame = async (isNextLevel: boolean = false) => {
+    initAudio(); // Initialize Audio Context on user interaction
+
     // If starting new run, reset total score
     if (!isNextLevel) {
       setScore(0);
+      setIsLeaderboardQualifying(false);
     }
     
     setStatus(GameStatus.LOADING_LEVEL);
@@ -95,40 +120,102 @@ const App: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [status, togglePause]);
 
+  const checkLeaderboardQualification = useCallback((finalScore: number) => {
+     // Check if this score qualifies for top 5
+     if (finalScore <= 0) return false;
+     
+     // If board is not full, it qualifies
+     if (leaderboard.length < MAX_LEADERBOARD_ENTRIES) return true;
+
+     // If score is higher than the lowest score
+     const lowestScore = leaderboard[leaderboard.length - 1].score;
+     return finalScore > lowestScore;
+  }, [leaderboard]);
+
   const handleGameOver = useCallback((win: boolean) => {
     const endTime = Date.now();
-    // Subtract paused time from duration so players aren't penalized for pausing
     const durationSeconds = Math.floor((endTime - startTimeRef.current - totalPausedTimeRef.current) / 1000);
     
+    let finalScore = score;
+    let runStats = {
+        time: durationSeconds,
+        seeds: seedsCollected,
+        levelBonus: 0,
+        timeBonus: 0,
+        totalRunScore: score
+    };
+
     if (win) {
-      // Calculate Score
       const levelBonus = 1000 * difficulty;
-      // Par time: 90s. 10 points per second under par.
       const timeBonus = Math.max(0, (90 - durationSeconds) * 10);
+      finalScore = score + levelBonus + timeBonus;
       
-      setScore(prev => {
-        const newScore = prev + levelBonus + timeBonus;
-        setLastRunStats({
-          time: durationSeconds,
-          seeds: seedsCollected,
-          levelBonus,
-          timeBonus,
-          totalRunScore: newScore
-        });
-        return newScore;
-      });
+      setScore(finalScore);
       
+      runStats = {
+        time: durationSeconds,
+        seeds: seedsCollected,
+        levelBonus,
+        timeBonus,
+        totalRunScore: finalScore
+      };
+      
+      setLastRunStats(runStats);
       setStatus(GameStatus.VICTORY);
     } else {
-      setLastRunStats(prev => ({ ...prev, totalRunScore: score }));
+      setLastRunStats(runStats);
       setStatus(GameStatus.GAME_OVER);
+      
+      // Only check leaderboard on death (Game Over), because Victory leads to next level
+      // But user might want to quit after victory? 
+      // Current design: Victory -> Next Level or Quit. 
+      // If Quit is chosen in Victory screen, we should ideally check leaderboard there too.
+      // For simplicity, we'll check qualification here for Game Over.
+      if (checkLeaderboardQualification(finalScore)) {
+          setIsLeaderboardQualifying(true);
+          setPlayerName('');
+      }
     }
-  }, [difficulty, seedsCollected, score]);
+  }, [difficulty, seedsCollected, score, checkLeaderboardQualification]);
 
   const handleCollect = useCallback(() => {
     setSeedsCollected(prev => prev + 1);
     setScore(prev => prev + 100);
   }, []);
+
+  const saveLeaderboardScore = () => {
+      const name = playerName.trim() || `Prairie Dog ${Math.floor(Math.random() * 1000)}`;
+      const newEntry: LeaderboardEntry = {
+          name,
+          score: lastRunStats.totalRunScore,
+          date: new Date().toISOString()
+      };
+
+      const newBoard = [...leaderboard, newEntry]
+          .sort((a, b) => b.score - a.score)
+          .slice(0, MAX_LEADERBOARD_ENTRIES);
+      
+      setLeaderboard(newBoard);
+      localStorage.setItem('prairie_leaderboard', JSON.stringify(newBoard));
+      
+      // Update high score display if needed
+      if (newBoard.length > 0) setHighScore(newBoard[0].score);
+
+      setIsLeaderboardQualifying(false);
+      setStatus(GameStatus.MENU);
+  };
+
+  const quitFromVictory = () => {
+      // If user quits after winning a level, submit score if qualified
+      const finalScore = lastRunStats.totalRunScore;
+      if (checkLeaderboardQualification(finalScore)) {
+           setStatus(GameStatus.GAME_OVER); // Switch to Game Over view to show input
+           setIsLeaderboardQualifying(true);
+           setPlayerName('');
+      } else {
+           setStatus(GameStatus.MENU);
+      }
+  };
 
   return (
     <div className="min-h-screen bg-gray-900 flex flex-col items-center justify-center font-sans text-white">
@@ -138,7 +225,7 @@ const App: React.FC = () => {
         <div className="flex items-center gap-4 pointer-events-auto">
           <div className="flex items-center gap-2 bg-black/40 p-2 rounded-lg backdrop-blur-md border border-white/10">
             <span className="text-2xl">🐿️</span>
-            <h1 className="font-bold text-lg hidden sm:block">Prairie Dog Plantformer</h1>
+            <h1 className="font-bold text-lg hidden sm:block">Prairie Dog Run</h1>
           </div>
           {/* High Score Display */}
           <div className="hidden md:flex items-center gap-2 bg-amber-900/40 p-2 rounded-lg backdrop-blur-md border border-amber-500/20">
@@ -220,47 +307,79 @@ const App: React.FC = () => {
 
         {/* MAIN MENU */}
         {status === GameStatus.MENU && (
-          <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center z-20 backdrop-blur-sm p-4">
-            <div className="bg-gray-800 p-8 rounded-2xl border border-gray-700 shadow-2xl max-w-md w-full text-center">
-              <h1 className="text-4xl font-extrabold text-amber-400 mb-2">Prairie Dog <br/> Plantformer</h1>
-              <p className="text-gray-400 mb-6">Use Arrow Keys or WASD to move. Space to Jump.</p>
-              
-              <div className="mb-6 flex items-center justify-center gap-4 bg-gray-900/50 p-4 rounded-xl">
-                 <div className="text-center">
-                    <div className="text-amber-500 text-xs uppercase font-bold mb-1">High Score</div>
-                    <div className="text-2xl font-mono font-bold text-white">{highScore.toLocaleString()}</div>
-                 </div>
-              </div>
+          <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center z-20 backdrop-blur-sm p-4 overflow-y-auto">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-4xl w-full">
+                {/* Left Col: Game Start */}
+                <div className="bg-gray-800 p-8 rounded-2xl border border-gray-700 shadow-2xl text-center flex flex-col justify-center">
+                    <h1 className="text-4xl font-extrabold text-amber-400 mb-2">Prairie Dog <br/> Run</h1>
+                    <p className="text-gray-400 mb-6">Use Arrow Keys or WASD to move. Space to Jump.</p>
+                    
+                    <div className="mb-6 space-y-2">
+                        <p className="text-sm font-semibold text-gray-300">Select Difficulty:</p>
+                        <div className="flex justify-center gap-2">
+                        {[1, 2, 3].map((d) => (
+                            <button
+                            key={d}
+                            onClick={() => setDifficulty(d)}
+                            className={`px-4 py-2 rounded-lg font-bold transition-all ${
+                                difficulty === d 
+                                ? 'bg-amber-500 text-black scale-105 ring-2 ring-amber-300' 
+                                : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                            }`}
+                            >
+                            {d === 1 ? 'Easy' : d === 2 ? 'Medium' : 'Hard'}
+                            </button>
+                        ))}
+                        </div>
+                    </div>
 
-              <div className="mb-6 space-y-2">
-                <p className="text-sm font-semibold text-gray-300">Select Difficulty:</p>
-                <div className="flex justify-center gap-2">
-                  {[1, 2, 3].map((d) => (
                     <button
-                      key={d}
-                      onClick={() => setDifficulty(d)}
-                      className={`px-4 py-2 rounded-lg font-bold transition-all ${
-                        difficulty === d 
-                          ? 'bg-amber-500 text-black scale-105 ring-2 ring-amber-300' 
-                          : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                      }`}
+                        onClick={() => startGame(false)}
+                        className="w-full bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-400 hover:to-emerald-500 text-white text-xl font-bold py-4 rounded-xl shadow-lg transform transition hover:scale-105 flex items-center justify-center gap-2"
                     >
-                      {d === 1 ? 'Easy' : d === 2 ? 'Medium' : 'Hard'}
+                        <Play weight="fill" /> Start Adventure
                     </button>
-                  ))}
+                    
+                    <div className="mt-4 text-xs text-gray-500">
+                        Levels generated by Gemini 2.5 Flash
+                    </div>
                 </div>
-              </div>
 
-              <button
-                onClick={() => startGame(false)}
-                className="w-full bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-400 hover:to-emerald-500 text-white text-xl font-bold py-4 rounded-xl shadow-lg transform transition hover:scale-105 flex items-center justify-center gap-2"
-              >
-                <Play weight="fill" /> Start Adventure
-              </button>
-              
-              <div className="mt-4 text-xs text-gray-500">
-                Levels generated by Gemini 2.5 Flash
-              </div>
+                {/* Right Col: Leaderboard */}
+                <div className="bg-gray-800/90 p-6 rounded-2xl border border-gray-700 shadow-2xl flex flex-col">
+                    <div className="flex items-center justify-center gap-2 mb-4">
+                        <Trophy className="text-yellow-400" size={24} weight="fill" />
+                        <h2 className="text-2xl font-bold text-white">Leaderboard</h2>
+                    </div>
+                    
+                    <div className="flex-1 overflow-y-auto bg-black/20 rounded-xl p-2">
+                        {leaderboard.length === 0 ? (
+                            <div className="h-full flex flex-col items-center justify-center text-gray-500 text-sm italic">
+                                <p>No champions yet.</p>
+                                <p>Be the first!</p>
+                            </div>
+                        ) : (
+                            <table className="w-full text-left text-sm">
+                                <thead className="text-xs text-gray-400 border-b border-white/10">
+                                    <tr>
+                                        <th className="pb-2 pl-2">Rank</th>
+                                        <th className="pb-2">Name</th>
+                                        <th className="pb-2 text-right pr-2">Score</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-white/5">
+                                    {leaderboard.map((entry, idx) => (
+                                        <tr key={idx} className="hover:bg-white/5 transition-colors">
+                                            <td className="py-3 pl-2 font-mono text-gray-400">#{idx + 1}</td>
+                                            <td className="py-3 font-bold text-amber-200">{entry.name}</td>
+                                            <td className="py-3 pr-2 text-right font-mono">{entry.score.toLocaleString()}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        )}
+                    </div>
+                </div>
             </div>
           </div>
         )}
@@ -287,17 +406,41 @@ const App: React.FC = () => {
                       <span className="text-gray-400">Run Score</span>
                       <span className="font-mono font-bold text-xl">{lastRunStats.totalRunScore.toLocaleString()}</span>
                    </div>
-                   {lastRunStats.totalRunScore >= highScore && highScore > 0 && (
-                     <div className="text-amber-400 font-bold text-sm animate-pulse">
-                        NEW HIGH SCORE!
+                   {isLeaderboardQualifying && (
+                     <div className="text-amber-400 font-bold text-sm animate-pulse mt-2">
+                        🏆 NEW HIGH SCORE!
                      </div>
                    )}
                 </div>
 
-                <div className="flex flex-col gap-3">
-                  <button onClick={() => startGame(false)} className="bg-white text-black font-bold py-3 rounded-lg hover:bg-gray-200 transition">Try Again (New Run)</button>
-                  <button onClick={() => setStatus(GameStatus.MENU)} className="bg-transparent border border-white/20 text-white py-3 rounded-lg hover:bg-white/10 transition">Main Menu</button>
-                </div>
+                {isLeaderboardQualifying ? (
+                    <div className="mb-6 animate-fade-in">
+                        <label className="block text-left text-xs text-gray-400 mb-1 ml-1">Enter Your Name:</label>
+                        <div className="flex gap-2">
+                            <input 
+                                type="text" 
+                                value={playerName}
+                                onChange={(e) => setPlayerName(e.target.value)}
+                                maxLength={12}
+                                className="bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 flex-1 text-white focus:border-amber-500 outline-none"
+                                placeholder="Prairie Dog"
+                                autoFocus
+                            />
+                            <button 
+                                onClick={saveLeaderboardScore}
+                                className="bg-amber-500 text-black p-2 rounded-lg hover:bg-amber-400 transition"
+                                title="Save Score"
+                            >
+                                <FloppyDisk size={24} weight="fill" />
+                            </button>
+                        </div>
+                    </div>
+                ) : (
+                    <div className="flex flex-col gap-3">
+                        <button onClick={() => startGame(false)} className="bg-white text-black font-bold py-3 rounded-lg hover:bg-gray-200 transition">Try Again (New Run)</button>
+                        <button onClick={() => setStatus(GameStatus.MENU)} className="bg-transparent border border-white/20 text-white py-3 rounded-lg hover:bg-white/10 transition">Main Menu</button>
+                    </div>
+                )}
              </div>
           </div>
         )}
@@ -331,7 +474,7 @@ const App: React.FC = () => {
 
                 <div className="flex flex-col gap-3">
                   <button onClick={() => startGame(true)} className="bg-emerald-500 text-white font-bold py-3 rounded-lg hover:bg-emerald-400 transition shadow-lg shadow-emerald-500/20">Next Level (Keep Score)</button>
-                  <button onClick={() => setStatus(GameStatus.MENU)} className="bg-transparent border border-white/20 text-white py-3 rounded-lg hover:bg-white/10 transition">Main Menu</button>
+                  <button onClick={quitFromVictory} className="bg-transparent border border-white/20 text-white py-3 rounded-lg hover:bg-white/10 transition">Quit & Save Score</button>
                 </div>
              </div>
           </div>

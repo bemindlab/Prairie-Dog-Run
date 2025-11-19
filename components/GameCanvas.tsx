@@ -1,9 +1,11 @@
+
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { GameStatus, LevelConfig, Player, GameObject, Vector2 } from '../types';
 import { 
   CANVAS_WIDTH, CANVAS_HEIGHT, GRAVITY, FRICTION, JUMP_FORCE, 
   MOVE_SPEED, MAX_SPEED, TERMINAL_VELOCITY, PLAYER_WIDTH, PLAYER_HEIGHT, COLORS 
 } from '../constants';
+import { playJump, playCollect, playDeath, playWin, startMusic, stopMusic } from '../services/audioService';
 
 interface GameCanvasProps {
   level: LevelConfig;
@@ -11,6 +13,10 @@ interface GameCanvasProps {
   onGameOver: (win: boolean) => void;
   onCollect: () => void;
 }
+
+const COYOTE_FRAMES = 8; // Grace period frames for jumping after leaving a platform
+const MAX_LIVES = 3;
+const INVINCIBILITY_DURATION = 120; // Frames (approx 2 seconds)
 
 const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCollect }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -33,6 +39,12 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
     timer: 0
   });
 
+  // Gameplay State
+  const coyoteFramesRef = useRef(0);
+  const livesRef = useRef(MAX_LIVES);
+  const lastSafePosRef = useRef<Vector2>({ x: 50, y: 400 });
+  const invincibilityRef = useRef(0);
+
   const cameraRef = useRef<Vector2>({ x: 0, y: 0 });
   const keysRef = useRef<{ [key: string]: boolean }>({});
   const gameObjectsRef = useRef<GameObject[]>([]);
@@ -44,6 +56,16 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
     const sheet = generatePrairieDogSpriteSheet();
     setSpriteSheet(sheet);
   }, []);
+
+  // Music Control
+  useEffect(() => {
+    if (status === GameStatus.PLAYING) {
+        startMusic();
+    } else {
+        stopMusic();
+    }
+    return () => stopMusic();
+  }, [status]);
 
   // Convert level config to GameObjects on mount/change
   useEffect(() => {
@@ -58,6 +80,10 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
       isDead: false,
       facingRight: true,
     };
+    coyoteFramesRef.current = 0;
+    livesRef.current = MAX_LIVES;
+    lastSafePosRef.current = { x: 50, y: 400 };
+    invincibilityRef.current = 0;
 
     const newObjects: GameObject[] = [];
 
@@ -76,17 +102,17 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
       const enemy: GameObject = {
         id: `enemy-${i}`,
         type: 'enemy',
-        subtype: e.type as 'snake' | 'hawk',
+        subtype: e.type as 'snake' | 'hawk' | 'bat' | 'bug' | 'mole',
         position: { x: e.x, y: e.y },
         size: { width: 40, height: 40 },
         velocity: { x: 0, y: 0 },
         initialPosition: { x: e.x, y: e.y },
         aiState: 'idle',
+        timer: 0,
       };
 
       if (e.type === 'snake') {
         // Snap snake to the platform below it and set patrol bounds
-        // Check for platform directly under (or close to) the spawn point
         const platform = level.platforms.find(p => 
              e.x + 20 > p.x && e.x + 20 < p.x + p.w && // Center x is over platform
              e.y + 40 >= p.y - 30 && e.y + 40 <= p.y + 30 // Bottom is near top
@@ -107,6 +133,28 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
       } else if (e.type === 'hawk') {
           enemy.aiState = 'hover';
           enemy.velocity = { x: 0, y: 0 };
+      } else if (e.type === 'bat') {
+          // Bats patrol horizontally in air with sine wave bob
+          enemy.aiState = 'patrol';
+          enemy.velocity = { x: 2, y: 0 };
+          enemy.patrolRange = { min: e.x - 200, max: e.x + 200 };
+      } else if (e.type === 'bug') {
+          // Bugs circle around their spawn
+          enemy.aiState = 'circle';
+          enemy.velocity = { x: 0, y: 0 };
+          enemy.size = { width: 25, height: 25 }; // Smaller hitbox
+      } else if (e.type === 'mole') {
+          // Moles sit in the ground and pop up
+          const platform = level.platforms.find(p => 
+            e.x + 20 > p.x && e.x + 20 < p.x + p.w && 
+            e.y + 40 >= p.y - 30 && e.y + 40 <= p.y + 30
+          );
+
+          if (platform) {
+            enemy.position.y = platform.y - 30; // Sits slightly lower visually
+          }
+          enemy.aiState = 'active';
+          enemy.timer = Math.random() * 200; // Random offset so they don't all pop at once
       }
 
       newObjects.push(enemy);
@@ -150,6 +198,28 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
     };
   }, []);
 
+  // Helper for taking damage / respawning
+  const handlePlayerDamage = () => {
+      if (invincibilityRef.current > 0) return; // Ignore if invincible
+
+      playDeath();
+      livesRef.current -= 1;
+
+      if (livesRef.current <= 0) {
+          onGameOver(false);
+      } else {
+          // Respawn logic
+          invincibilityRef.current = INVINCIBILITY_DURATION;
+          
+          // Reset to safe pos
+          const p = playerRef.current;
+          p.position.x = lastSafePosRef.current.x;
+          p.position.y = lastSafePosRef.current.y - 50; // Drop in slightly above
+          p.velocity = { x: 0, y: 0 };
+          p.isGrounded = false;
+      }
+  };
+
   // Main Game Loop
   const update = useCallback(() => {
     if (status !== GameStatus.PLAYING) return;
@@ -158,6 +228,10 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
     const objects = gameObjectsRef.current;
 
     // --- Physics ---
+
+    // Decrement Timers
+    if (coyoteFramesRef.current > 0) coyoteFramesRef.current--;
+    if (invincibilityRef.current > 0) invincibilityRef.current--;
     
     // Gravity
     player.velocity.y += GRAVITY;
@@ -179,10 +253,13 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
     player.velocity.x = Math.max(Math.min(player.velocity.x, MAX_SPEED), -MAX_SPEED);
     player.velocity.y = Math.min(player.velocity.y, TERMINAL_VELOCITY);
 
-    // Jump
-    if ((keysRef.current['Space'] || keysRef.current['ArrowUp'] || keysRef.current['KeyW']) && player.isGrounded) {
+    // Jump (with Coyote Time)
+    const canJump = player.isGrounded || coyoteFramesRef.current > 0;
+    if ((keysRef.current['Space'] || keysRef.current['ArrowUp'] || keysRef.current['KeyW']) && canJump) {
       player.velocity.y = JUMP_FORCE;
       player.isGrounded = false;
+      coyoteFramesRef.current = 0; // Consume coyote time immediately
+      playJump();
     }
 
     // Apply X movement
@@ -194,10 +271,20 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
     player.isGrounded = false; // Assume falling until collision proves otherwise
     checkCollisions(player, objects, 'y');
 
+    // If grounded after collisions, reset Coyote Time and update Safe Position
+    if (player.isGrounded) {
+      coyoteFramesRef.current = COYOTE_FRAMES;
+      
+      // Update safe position if standing on solid ground
+      // We perform a basic check to ensure we aren't just on a tiny edge
+      // (Optional refinement: Check if platform width is sufficient)
+      lastSafePosRef.current = { x: player.position.x, y: player.position.y };
+    }
+
     // Death floor
     if (player.position.y > CANVAS_HEIGHT + 200) {
-        onGameOver(false);
-        return; // Stop loop
+        handlePlayerDamage();
+        if (livesRef.current <= 0) return; // Stop loop if game over
     }
 
     // --- Animation Logic ---
@@ -216,53 +303,90 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
       anim.state = newState;
       anim.frame = 0;
       anim.timer = 0;
+    }
+
+    if (newState === 'jump') {
+        if (player.velocity.y < 0) {
+            anim.frame = 0; 
+        } else {
+            anim.frame = 1;
+        }
     } else {
-      anim.timer++;
-      const speed = newState === 'run' ? 5 : 15; // Run is faster
-      if (anim.timer > speed) {
-        anim.timer = 0;
-        anim.frame++;
-        // Wrap frames
-        // Idle: 2 frames, Run: 4 frames, Jump: 1 frame
-        const maxFrames = newState === 'idle' ? 2 : newState === 'run' ? 4 : 1;
-        if (anim.frame >= maxFrames) anim.frame = 0;
-      }
+        anim.timer++;
+        const speed = newState === 'run' ? 5 : 15;
+        if (anim.timer > speed) {
+            anim.timer = 0;
+            anim.frame++;
+            const maxFrames = newState === 'idle' ? 2 : 4;
+            if (anim.frame >= maxFrames) anim.frame = 0;
+        }
     }
 
     // --- Enemy AI Logic ---
     objects.forEach(obj => {
       if (obj.type === 'enemy') {
         
-        // --- SNAKE AI (Patrol) ---
+        // --- SNAKE AI (Patrol Ground) ---
         if (obj.subtype === 'snake' && obj.aiState === 'patrol' && obj.velocity && obj.patrolRange) {
              obj.position.x += obj.velocity.x;
-
-             // Bounce off patrol limits
              if (obj.position.x <= obj.patrolRange.min) {
                  obj.position.x = obj.patrolRange.min;
-                 obj.velocity.x = Math.abs(obj.velocity.x); // Move right
+                 obj.velocity.x = Math.abs(obj.velocity.x);
              } else if (obj.position.x >= obj.patrolRange.max) {
                  obj.position.x = obj.patrolRange.max;
-                 obj.velocity.x = -Math.abs(obj.velocity.x); // Move left
+                 obj.velocity.x = -Math.abs(obj.velocity.x);
              }
+        }
+
+        // --- BAT AI (Sine Wave Patrol) ---
+        if (obj.subtype === 'bat' && obj.aiState === 'patrol' && obj.velocity && obj.patrolRange && obj.initialPosition) {
+            obj.position.x += obj.velocity.x;
+            if (obj.position.x <= obj.patrolRange.min) {
+                obj.position.x = obj.patrolRange.min;
+                obj.velocity.x = Math.abs(obj.velocity.x);
+            } else if (obj.position.x >= obj.patrolRange.max) {
+                obj.position.x = obj.patrolRange.max;
+                obj.velocity.x = -Math.abs(obj.velocity.x);
+            }
+            const waveSpeed = 0.1;
+            const amplitude = 40;
+            obj.position.y = obj.initialPosition.y + Math.sin(frameCountRef.current * waveSpeed) * amplitude;
+        }
+
+        // --- BUG AI (Circular Swarm) ---
+        if (obj.subtype === 'bug' && obj.aiState === 'circle' && obj.initialPosition) {
+            const speed = 0.15;
+            const radius = 50;
+            const angle = frameCountRef.current * speed;
+            obj.position.x = obj.initialPosition.x + Math.cos(angle) * radius;
+            obj.position.y = obj.initialPosition.y + Math.sin(angle) * radius;
+        }
+
+        // --- MOLE AI (Pop Up/Down) ---
+        if (obj.subtype === 'mole') {
+            obj.timer = (obj.timer || 0) + 1;
+            const cycleLength = 240;
+            const t = obj.timer % cycleLength;
+            if (t < 100) {
+                obj.aiState = 'hidden';
+            } else if (t < 130) {
+                obj.aiState = 'popping';
+            } else if (t < 210) {
+                obj.aiState = 'active';
+            } else {
+                obj.aiState = 'popping';
+            }
         }
 
         // --- HAWK AI (Hover -> Dive -> Return) ---
         if (obj.subtype === 'hawk' && obj.initialPosition) {
-            
             const distX = player.position.x - obj.position.x;
             const distY = player.position.y - obj.position.y;
 
             if (obj.aiState === 'hover') {
-                // Gentle Bobbing
                 obj.position.y = obj.initialPosition.y + Math.sin(frameCountRef.current * 0.05) * 10;
-                
-                // Detect Player for Dive
-                // Logic: Player is close horizontally (< 300px) and below the hawk (> 50px)
                 if (Math.abs(distX) < 300 && distY > 50 && distY < 400) {
                     obj.aiState = 'dive';
-                    
-                    // Calculate dive vector towards player's current pos
                     const angle = Math.atan2(distY, distX);
                     const diveSpeed = 6;
                     obj.velocity = {
@@ -270,34 +394,24 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
                         y: Math.sin(angle) * diveSpeed
                     };
                 }
-
             } else if (obj.aiState === 'dive') {
                 if (obj.velocity) {
                     obj.position.x += obj.velocity.x;
                     obj.position.y += obj.velocity.y;
                 }
-
-                // Stop Dive conditions:
-                // 1. Hit the ground (approx check)
-                // 2. Travelled too far down
                 if (obj.position.y > obj.initialPosition.y + 400 || obj.position.y > CANVAS_HEIGHT - 50) {
                     obj.aiState = 'return';
                 }
-
             } else if (obj.aiState === 'return') {
-                // Return to start position
                 const dx = obj.initialPosition.x - obj.position.x;
                 const dy = obj.initialPosition.y - obj.position.y;
                 const dist = Math.sqrt(dx*dx + dy*dy);
-                
                 if (dist < 5) {
-                    // Arrived
                     obj.position.x = obj.initialPosition.x;
                     obj.position.y = obj.initialPosition.y;
                     obj.velocity = { x: 0, y: 0 };
                     obj.aiState = 'hover';
                 } else {
-                    // Normalize and move
                     const angle = Math.atan2(dy, dx);
                     const returnSpeed = 4;
                     obj.position.x += Math.cos(angle) * returnSpeed;
@@ -309,11 +423,9 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
     });
 
     // --- Camera Follow ---
-    // Center player with some lerp
     const targetCamX = player.position.x - CANVAS_WIDTH / 2 + player.size.width / 2;
-    const maxCamX = 3000 - CANVAS_WIDTH; // Rough level width max
+    const maxCamX = 3000 - CANVAS_WIDTH;
     cameraRef.current.x += (targetCamX - cameraRef.current.x) * 0.1;
-    // Clamp camera
     cameraRef.current.x = Math.max(0, Math.min(cameraRef.current.x, maxCamX));
     
     frameCountRef.current++;
@@ -327,15 +439,15 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
     const pTop = p.position.y;
     const pBottom = p.position.y + p.size.height;
 
-    // Filter active objects
     for (let i = objects.length - 1; i >= 0; i--) {
       const obj = objects[i];
+      if (obj.subtype === 'mole' && obj.aiState === 'hidden') continue;
+
       const oLeft = obj.position.x;
       const oRight = obj.position.x + obj.size.width;
       const oTop = obj.position.y;
       const oBottom = obj.position.y + obj.size.height;
 
-      // AABB Collision
       if (pRight > oLeft && pLeft < oRight && pBottom > oTop && pTop < oBottom) {
         if (obj.type === 'platform') {
           if (axis === 'x') {
@@ -343,22 +455,24 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
             else if (p.velocity.x < 0) p.position.x = oRight;
             p.velocity.x = 0;
           } else {
-            if (p.velocity.y > 0) { // Falling onto platform
+            if (p.velocity.y > 0) { 
               p.position.y = oTop - p.size.height;
               p.isGrounded = true;
               p.velocity.y = 0;
-            } else if (p.velocity.y < 0) { // Hitting head
+            } else if (p.velocity.y < 0) { 
               p.position.y = oBottom;
               p.velocity.y = 0;
             }
           }
         } else if (obj.type === 'enemy') {
-          onGameOver(false);
+          handlePlayerDamage();
+          if (livesRef.current <= 0) return;
         } else if (obj.type === 'collectible') {
-          // Remove collectible
           objects.splice(i, 1);
+          playCollect();
           onCollect();
         } else if (obj.type === 'end_goal') {
+          playWin();
           onGameOver(true);
         }
       }
@@ -384,47 +498,67 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
     // Draw Objects
     gameObjectsRef.current.forEach(obj => {
       if (obj.type === 'platform') {
-        // Grass top
         ctx.fillStyle = COLORS.ground;
         ctx.fillRect(obj.position.x, obj.position.y, obj.size.width, 20);
-        // Dirt body
         ctx.fillStyle = COLORS.dirt;
         ctx.fillRect(obj.position.x, obj.position.y + 20, obj.size.width, obj.size.height - 20);
       } else if (obj.type === 'enemy') {
-        ctx.font = "30px Arial";
-        if (obj.subtype === 'snake') {
-             // Flip snake based on velocity
-             ctx.save();
-             const centerX = obj.position.x + 20;
-             const centerY = obj.position.y + 20;
-             ctx.translate(centerX, centerY);
-             
-             // Standard snake emoji 🐍 faces left.
-             // If moving right (vel > 0), scale(-1, 1) to face right.
-             if (obj.velocity && obj.velocity.x > 0) {
-                 ctx.scale(-1, 1);
-             }
-             ctx.fillText('🐍', -15, 10);
-             ctx.restore();
-        }
-        else if (obj.subtype === 'hawk') {
-            // Hawk faces player? Or just direction of movement
-            ctx.save();
-            const centerX = obj.position.x + 20;
-            const centerY = obj.position.y + 20;
-            ctx.translate(centerX, centerY);
-            
-            // Hawk 🦅 faces Left. 
-            // If velocity.x > 0 (moving right), flip.
-            if (obj.velocity && obj.velocity.x > 0) ctx.scale(-1, 1);
-
-            ctx.fillText('🦅', -15, 10);
-            ctx.restore();
+        if (obj.subtype === 'mole') {
+            if (obj.aiState !== 'hidden') {
+                ctx.save();
+                ctx.beginPath();
+                ctx.rect(obj.position.x - 10, obj.position.y - 50, 60, 60); 
+                ctx.clip();
+                let drawY = obj.position.y;
+                if (obj.aiState === 'popping') drawY += 20;
+                
+                ctx.font = "30px Arial";
+                ctx.fillText('🥔', obj.position.x + 5, drawY + 35); 
+                ctx.fillStyle = 'black';
+                ctx.fillRect(obj.position.x + 15, drawY + 20, 4, 4);
+                ctx.fillRect(obj.position.x + 25, drawY + 20, 4, 4);
+                ctx.fillStyle = 'pink';
+                ctx.fillRect(obj.position.x + 18, drawY + 26, 8, 6);
+                ctx.restore();
+            }
+            if (obj.aiState === 'hidden') {
+                 ctx.fillStyle = '#5D4037';
+                 ctx.beginPath();
+                 ctx.arc(obj.position.x + 20, obj.position.y + 10, 15, 0, Math.PI, true);
+                 ctx.fill();
+            }
         }
         else {
-            ctx.fillStyle = COLORS.enemy;
-            ctx.fillRect(obj.position.x, obj.position.y, 40, 40);
+            ctx.font = "30px Arial";
+            ctx.save();
+            const centerX = obj.position.x + obj.size.width/2;
+            const centerY = obj.position.y + obj.size.height/2;
+            ctx.translate(centerX, centerY);
+
+            if (obj.subtype === 'snake') {
+                if (obj.velocity && obj.velocity.x > 0) ctx.scale(-1, 1);
+                ctx.fillText('🐍', -15, 10);
+            }
+            else if (obj.subtype === 'hawk') {
+                if (obj.velocity && obj.velocity.x > 0) ctx.scale(-1, 1);
+                ctx.fillText('🦅', -15, 10);
+            }
+            else if (obj.subtype === 'bat') {
+                if (obj.velocity && obj.velocity.x > 0) ctx.scale(-1, 1);
+                ctx.fillText('🦇', -15, 10);
+            }
+            else if (obj.subtype === 'bug') {
+                ctx.rotate(Math.sin(frameCountRef.current * 0.5) * 0.2);
+                ctx.font = "24px Arial";
+                ctx.fillText('🐝', -12, 8);
+            }
+            else {
+                ctx.fillStyle = COLORS.enemy;
+                ctx.fillRect(-20, -20, 40, 40);
+            }
+            ctx.restore();
         }
+
       } else if (obj.type === 'collectible') {
         ctx.font = "20px Arial";
         ctx.fillText('🌱', obj.position.x, obj.position.y + 20);
@@ -437,25 +571,44 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
       }
     });
 
-    // Draw Player with Sprite Sheet
+    // Draw Player
     const p = playerRef.current;
     const anim = animRef.current;
 
-    ctx.save();
-    
-    // Handle flipping
-    if (!p.facingRight) {
-        ctx.translate(p.position.x + p.size.width, p.position.y);
-        ctx.scale(-1, 1);
-        // Draw at 0,0
-        drawSprite(ctx, spriteSheet, anim.state, anim.frame, 0, 0, p.size.width, p.size.height);
-    } else {
-        ctx.translate(p.position.x, p.position.y);
-        drawSprite(ctx, spriteSheet, anim.state, anim.frame, 0, 0, p.size.width, p.size.height);
+    // Flashing effect for invincibility
+    let shouldDrawPlayer = true;
+    if (invincibilityRef.current > 0) {
+        // Blink every few frames
+        if (Math.floor(frameCountRef.current / 4) % 2 === 0) {
+            shouldDrawPlayer = false;
+        }
+    }
+
+    if (shouldDrawPlayer) {
+        ctx.save();
+        if (!p.facingRight) {
+            ctx.translate(p.position.x + p.size.width, p.position.y);
+            ctx.scale(-1, 1);
+            drawSprite(ctx, spriteSheet, anim.state, anim.frame, 0, 0, p.size.width, p.size.height);
+        } else {
+            ctx.translate(p.position.x, p.position.y);
+            drawSprite(ctx, spriteSheet, anim.state, anim.frame, 0, 0, p.size.width, p.size.height);
+        }
+        ctx.restore();
     }
     
     ctx.restore();
 
+    // Draw UI (Hearts) on top of everything (Fixed position)
+    ctx.save();
+    ctx.font = "24px Arial";
+    ctx.fillStyle = "white";
+    ctx.shadowColor = "black";
+    ctx.shadowBlur = 4;
+    // Draw hearts based on lives
+    let hearts = "";
+    for(let i=0; i<livesRef.current; i++) hearts += "❤️ ";
+    ctx.fillText(hearts, 20, 80);
     ctx.restore();
   };
 
@@ -464,7 +617,6 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
         requestRef.current = requestAnimationFrame(update);
     } else {
         if (requestRef.current) cancelAnimationFrame(requestRef.current);
-        // Initial draw for paused state
         draw();
     }
     return () => {
@@ -489,7 +641,6 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
         className="bg-sky-200 rounded-lg shadow-2xl max-w-full max-h-full object-contain"
       />
       
-      {/* Mobile Controls Overlay */}
       <div className="absolute bottom-4 left-4 flex gap-4 md:hidden no-select">
          <button 
             className="w-16 h-16 bg-white/30 rounded-full text-3xl flex items-center justify-center backdrop-blur-sm active:bg-white/60"
@@ -513,9 +664,8 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
   );
 };
 
-const SPRITE_SIZE = 64; // Width/Height of a single tile in the sprite sheet
+const SPRITE_SIZE = 64; 
 
-// Helper to draw a frame from the sprite sheet
 const drawSprite = (
     ctx: CanvasRenderingContext2D,
     sheet: HTMLCanvasElement | null,
@@ -527,11 +677,6 @@ const drawSprite = (
     h: number
 ) => {
     if (!sheet) return;
-
-    // Map State to Row Index
-    // Row 0: Idle
-    // Row 1: Run
-    // Row 2: Jump
     let row = 0;
     if (state === 'run') row = 1;
     if (state === 'jump') row = 2;
@@ -542,112 +687,90 @@ const drawSprite = (
     ctx.drawImage(sheet, sx, sy, SPRITE_SIZE, SPRITE_SIZE, x, y, w, h);
 };
 
-// Generates a pixel-art style sprite sheet programmatically
 const generatePrairieDogSpriteSheet = (): HTMLCanvasElement => {
   const canvas = document.createElement('canvas');
-  canvas.width = SPRITE_SIZE * 4; // Max 4 frames
-  canvas.height = SPRITE_SIZE * 3; // 3 Rows
+  canvas.width = SPRITE_SIZE * 4; 
+  canvas.height = SPRITE_SIZE * 3; 
   const ctx = canvas.getContext('2d');
   if (!ctx) return canvas;
 
-  const cMain = '#D97706'; // amber-600
-  const cLight = '#FDE68A'; // amber-200
-  const cDark = '#92400E'; // brown
+  const cMain = '#D97706'; 
+  const cLight = '#FDE68A'; 
+  const cDark = '#92400E'; 
   
-  // Helper to fill rect
   const r = (x: number, y: number, w: number, h: number, col: string) => {
     ctx.fillStyle = col;
     ctx.fillRect(Math.floor(x), Math.floor(y), w, h);
   };
 
-  // --- ROW 0: IDLE (2 Frames) ---
   for(let f=0; f<2; f++) {
     const ox = f * SPRITE_SIZE;
     const oy = 0;
-    
-    // Feet
     r(ox+22, oy+54, 8, 6, cDark);
     r(ox+34, oy+54, 8, 6, cDark);
-
-    // Body
     r(ox+20, oy+24, 24, 32, cMain);
-    r(ox+24, oy+28, 16, 26, cLight); // Belly
-
-    // Head
+    r(ox+24, oy+28, 16, 26, cLight); 
     r(ox+18, oy+10, 28, 24, cMain);
-    // Ears
     r(ox+18, oy+8, 6, 6, cDark);
     r(ox+40, oy+8, 6, 6, cDark);
-    
-    // Face
     if (f === 0) {
-        r(ox+24, oy+16, 4, 4, 'black'); // Eye L
-        r(ox+36, oy+16, 4, 4, 'black'); // Eye R
+        r(ox+24, oy+16, 4, 4, 'black'); 
+        r(ox+36, oy+16, 4, 4, 'black'); 
     } else {
-        // Blink
         r(ox+24, oy+18, 4, 2, 'black');
         r(ox+36, oy+18, 4, 2, 'black');
     }
-    r(ox+28, oy+22, 8, 6, cLight); // Snout
-    r(ox+30, oy+22, 4, 3, 'black'); // Nose
-
-    // Arms (tucked)
+    r(ox+28, oy+22, 8, 6, cLight); 
+    r(ox+30, oy+22, 4, 3, 'black'); 
     r(ox+22, oy+34, 4, 8, cDark);
     r(ox+38, oy+34, 4, 8, cDark);
   }
 
-  // --- ROW 1: RUN (4 Frames) ---
   for(let f=0; f<4; f++) {
     const ox = f * SPRITE_SIZE;
     const oy = SPRITE_SIZE;
-    
-    // Leg cycle
     const legOff = Math.sin(f * Math.PI / 2) * 10;
-    
-    // Back Leg
     r(ox+20+legOff, oy+50, 8, 12, cDark);
-    // Front Leg
     r(ox+36-legOff, oy+50, 8, 12, cDark);
-    
-    // Body (Forward Lean)
     r(ox+18, oy+28, 32, 24, cMain);
     r(ox+22, oy+32, 24, 16, cLight);
-
-    // Head (Right side)
     r(ox+40, oy+14, 22, 22, cMain);
-    r(ox+44, oy+10, 6, 6, cDark); // Ear
-    r(ox+52, oy+18, 4, 4, 'black'); // Eye
-    r(ox+56, oy+24, 6, 6, cLight); // Snout
-    r(ox+60, oy+24, 2, 2, 'black'); // Nose
-
-    // Tail
+    r(ox+44, oy+10, 6, 6, cDark); 
+    r(ox+52, oy+18, 4, 4, 'black'); 
+    r(ox+56, oy+24, 6, 6, cLight); 
+    r(ox+60, oy+24, 2, 2, 'black'); 
     r(ox+10, oy+40, 10, 6, cDark);
   }
 
-  // --- ROW 2: JUMP (1 Frame) ---
   {
     const ox = 0;
     const oy = SPRITE_SIZE * 2;
-    
-    // Legs (Splayed)
     r(ox+16, oy+50, 8, 10, cDark);
     r(ox+40, oy+45, 8, 10, cDark);
-    
-    // Body (Stretched)
     r(ox+20, oy+20, 24, 34, cMain);
     r(ox+24, oy+24, 16, 26, cLight);
-    
-    // Head
     r(ox+22, oy+8, 26, 22, cMain);
     r(ox+22, oy+4, 6, 6, cDark);
     r(ox+40, oy+4, 6, 6, cDark);
-    r(ox+38, oy+14, 4, 4, 'black'); // Eye Side/Up
-
-    // Arms (Up)
+    r(ox+38, oy+14, 4, 4, 'black'); 
     r(ox+44, oy+24, 8, 6, cDark);
-    
-    // Tail
+    r(ox+18, oy+24, 8, 6, cDark); 
     r(ox+18, oy+48, 6, 8, cDark);
+  }
+
+  {
+    const ox = SPRITE_SIZE;
+    const oy = SPRITE_SIZE * 2;
+    r(ox+20, oy+52, 8, 10, cDark);
+    r(ox+36, oy+52, 8, 10, cDark);
+    r(ox+20, oy+24, 24, 30, cMain);
+    r(ox+24, oy+28, 16, 22, cLight);
+    r(ox+22, oy+10, 26, 22, cMain);
+    r(ox+22, oy+6, 6, 6, cDark);
+    r(ox+40, oy+6, 6, 6, cDark);
+    r(ox+40, oy+16, 4, 4, 'black'); 
+    r(ox+44, oy+28, 8, 6, cDark); 
+    r(ox+14, oy+35, 6, 10, cDark);
   }
 
   return canvas;

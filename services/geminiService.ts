@@ -30,7 +30,7 @@ const levelSchema: Schema = {
         properties: {
           x: { type: Type.NUMBER },
           y: { type: Type.NUMBER },
-          type: { type: Type.STRING, enum: ["snake", "hawk"] },
+          type: { type: Type.STRING, enum: ["snake", "hawk", "bat", "bug", "mole"] },
         },
         required: ["x", "y", "type"],
       },
@@ -76,9 +76,10 @@ export const generateLevel = async (difficulty: number): Promise<LevelConfig> =>
     1. Create a 'ground' using platforms near y=500 to y=600. Gaps are allowed.
     2. Add platforms at various heights (y=200 to y=450) for jumping.
     3. Add 'snake' enemies on ground platforms.
-    4. Add 'hawk' enemies in the air.
-    5. Place 'collectibles' (seeds) in reachable but slightly challenging spots.
-    6. Place the 'goal' (burrow) at the far right (approx x=2800).
+    4. Add 'mole' enemies that ambush from the ground on platforms.
+    5. Add flying enemies: 'hawk' (high up), 'bat' (mid-air patrol), or 'bug' (erratic swarms).
+    6. Place 'collectibles' (seeds) in reachable but slightly challenging spots.
+    7. Place the 'goal' (burrow) at the far right (approx x=2800).
     
     Output ONLY valid JSON conforming to the schema.
   `;
@@ -111,7 +112,11 @@ export const generateLevel = async (difficulty: number): Promise<LevelConfig> =>
         { x: 400, y: 350, w: 200, h: 20 },
         { x: 800, y: 250, w: 200, h: 20 },
       ],
-      enemies: [{ x: 600, y: 460, type: 'snake' }],
+      enemies: [
+        { x: 600, y: 460, type: 'snake' },
+        { x: 1400, y: 300, type: 'bat' },
+        { x: 850, y: 250, type: 'mole' }
+      ],
       collectibles: [{ x: 500, y: 300 }],
       goal: { x: 2800, y: 450 }
     };

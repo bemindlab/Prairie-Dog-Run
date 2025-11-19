@@ -12,6 +12,7 @@ export const CANVAS_WIDTH = 1024;
 export const CANVAS_HEIGHT = 600;
 
 export const GENERATION_MODEL = 'gemini-2.5-flash';
+export const MAX_LEADERBOARD_ENTRIES = 5;
 
 // Colors for fallback rendering
 export const COLORS = {

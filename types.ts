@@ -16,13 +16,14 @@ export interface GameObject {
   position: Vector2;
   size: Size;
   type: 'platform' | 'enemy' | 'collectible' | 'end_goal';
-  subtype?: 'snake' | 'hawk' | 'seed' | 'cactus';
+  subtype?: 'snake' | 'hawk' | 'bat' | 'bug' | 'mole' | 'seed';
   
   // AI / Physics Properties
   velocity?: Vector2;
   initialPosition?: Vector2;
   patrolRange?: { min: number; max: number };
-  aiState?: string; // e.g. 'idle', 'patrol', 'hover', 'dive', 'return'
+  aiState?: string; // e.g. 'idle', 'patrol', 'hover', 'dive', 'return', 'circle', 'hidden', 'active'
+  timer?: number; // General purpose timer for AI cycles
 }
 
 export interface Player {
@@ -34,12 +35,18 @@ export interface Player {
   facingRight: boolean;
 }
 
+export interface LeaderboardEntry {
+  name: string;
+  score: number;
+  date: string;
+}
+
 // AI Gen Types
 export interface LevelConfig {
   name: string;
   description: string;
   platforms: { x: number; y: number; w: number; h: number }[];
-  enemies: { x: number; y: number; type: 'snake' | 'hawk' }[];
+  enemies: { x: number; y: number; type: 'snake' | 'hawk' | 'bat' | 'bug' | 'mole' }[];
   collectibles: { x: number; y: number }[];
   goal: { x: number; y: number };
 }
