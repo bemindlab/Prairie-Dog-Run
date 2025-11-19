@@ -1,8 +1,8 @@
 export const GRAVITY = 0.6;
-export const FRICTION = 0.85;
+export const FRICTION = 0.92;
 export const JUMP_FORCE = -14;
-export const MOVE_SPEED = 1.2; // Acceleration
-export const MAX_SPEED = 8;
+export const MOVE_SPEED = 2.0; // Acceleration
+export const MAX_SPEED = 12;
 export const TERMINAL_VELOCITY = 15;
 
 export const PLAYER_WIDTH = 40;

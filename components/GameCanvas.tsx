@@ -44,6 +44,8 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
   const livesRef = useRef(MAX_LIVES);
   const lastSafePosRef = useRef<Vector2>({ x: 50, y: 400 });
   const invincibilityRef = useRef(0);
+  const isGameOverRef = useRef(false);
+  const gameOverTimerRef = useRef(0);
 
   const cameraRef = useRef<Vector2>({ x: 0, y: 0 });
   const keysRef = useRef<{ [key: string]: boolean }>({});
@@ -84,6 +86,8 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
     livesRef.current = MAX_LIVES;
     lastSafePosRef.current = { x: 50, y: 400 };
     invincibilityRef.current = 0;
+    isGameOverRef.current = false;
+    gameOverTimerRef.current = 0;
 
     const newObjects: GameObject[] = [];
 
@@ -200,13 +204,15 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
 
   // Helper for taking damage / respawning
   const handlePlayerDamage = () => {
-      if (invincibilityRef.current > 0) return; // Ignore if invincible
+      if (invincibilityRef.current > 0 || isGameOverRef.current) return; // Ignore if invincible or already dying
 
       playDeath();
       livesRef.current -= 1;
 
       if (livesRef.current <= 0) {
-          onGameOver(false);
+          isGameOverRef.current = true;
+          playerRef.current.velocity = { x: 0, y: -12 }; // Death Hop
+          // onGameOver(false) called in update loop after animation
       } else {
           // Respawn logic
           invincibilityRef.current = INVINCIBILITY_DURATION;
@@ -225,6 +231,26 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
     if (status !== GameStatus.PLAYING) return;
 
     const player = playerRef.current;
+    
+    // --- Game Over Animation ---
+    if (isGameOverRef.current) {
+        gameOverTimerRef.current++;
+        
+        // Simple Physics: Gravity only, no collisions (fall through floor)
+        player.velocity.y += GRAVITY;
+        player.position.y += player.velocity.y;
+        
+        // Wait for animation to finish
+        if (gameOverTimerRef.current > 100) {
+            onGameOver(false);
+            return;
+        }
+        
+        draw();
+        requestRef.current = requestAnimationFrame(update);
+        return;
+    }
+
     const objects = gameObjectsRef.current;
 
     // --- Physics ---
@@ -276,15 +302,13 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
       coyoteFramesRef.current = COYOTE_FRAMES;
       
       // Update safe position if standing on solid ground
-      // We perform a basic check to ensure we aren't just on a tiny edge
-      // (Optional refinement: Check if platform width is sufficient)
       lastSafePosRef.current = { x: player.position.x, y: player.position.y };
     }
 
     // Death floor
     if (player.position.y > CANVAS_HEIGHT + 200) {
         handlePlayerDamage();
-        if (livesRef.current <= 0) return; // Stop loop if game over
+        if (livesRef.current <= 0 && !isGameOverRef.current) return; // Should have triggered game over state
     }
 
     // --- Animation Logic ---
@@ -504,28 +528,50 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
         ctx.fillRect(obj.position.x, obj.position.y + 20, obj.size.width, obj.size.height - 20);
       } else if (obj.type === 'enemy') {
         if (obj.subtype === 'mole') {
-            if (obj.aiState !== 'hidden') {
+            const isHidden = obj.aiState === 'hidden';
+            const isPopping = obj.aiState === 'popping';
+            
+            // Draw Dirt Mound/Hole base
+            ctx.fillStyle = '#5D4037';
+            ctx.beginPath();
+            ctx.ellipse(obj.position.x + 20, obj.position.y + 35, 22, 8, 0, 0, 2 * Math.PI);
+            ctx.fill();
+
+            if (!isHidden) {
                 ctx.save();
-                ctx.beginPath();
-                ctx.rect(obj.position.x - 10, obj.position.y - 50, 60, 60); 
-                ctx.clip();
-                let drawY = obj.position.y;
-                if (obj.aiState === 'popping') drawY += 20;
+                // Offset for popping animation (rising up)
+                const yOffset = isPopping ? 15 : 0;
                 
-                ctx.font = "30px Arial";
-                ctx.fillText('🥔', obj.position.x + 5, drawY + 35); 
+                // Clip so it looks like it comes out of the mound
+                ctx.beginPath();
+                ctx.rect(obj.position.x - 10, obj.position.y - 40, 60, 75); // Clip area above the hole
+                ctx.clip();
+
+                // Draw Potato Body
+                ctx.font = "32px Arial";
+                ctx.fillText('🥔', obj.position.x + 2, obj.position.y + 35 + yOffset); 
+                
+                // Draw Face relative to potato
+                const faceY = obj.position.y + 20 + yOffset;
                 ctx.fillStyle = 'black';
-                ctx.fillRect(obj.position.x + 15, drawY + 20, 4, 4);
-                ctx.fillRect(obj.position.x + 25, drawY + 20, 4, 4);
-                ctx.fillStyle = 'pink';
-                ctx.fillRect(obj.position.x + 18, drawY + 26, 8, 6);
+                ctx.fillRect(obj.position.x + 14, faceY, 4, 4); // Left Eye
+                ctx.fillRect(obj.position.x + 26, faceY, 4, 4); // Right Eye
+                ctx.fillStyle = '#F472B6'; // Pink-400
+                ctx.fillRect(obj.position.x + 18, faceY + 6, 8, 5); // Nose
+
+                // Draw Teeth
+                ctx.fillStyle = 'white';
+                ctx.fillRect(obj.position.x + 20, faceY + 11, 4, 4); 
+
                 ctx.restore();
-            }
-            if (obj.aiState === 'hidden') {
-                 ctx.fillStyle = '#5D4037';
-                 ctx.beginPath();
-                 ctx.arc(obj.position.x + 20, obj.position.y + 10, 15, 0, Math.PI, true);
-                 ctx.fill();
+                
+                // Dirt debris if popping
+                if (isPopping) {
+                    ctx.fillStyle = '#78350F'; // amber-900
+                    ctx.fillRect(obj.position.x + 5, obj.position.y + 30, 4, 4);
+                    ctx.fillRect(obj.position.x + 35, obj.position.y + 28, 3, 3);
+                    ctx.fillRect(obj.position.x - 2, obj.position.y + 32, 3, 3);
+                }
             }
         }
         else {
@@ -586,6 +632,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
 
     if (shouldDrawPlayer) {
         ctx.save();
+        // If dying, rotation can be applied if desired, but simple falling is usually enough
         if (!p.facingRight) {
             ctx.translate(p.position.x + p.size.width, p.position.y);
             ctx.scale(-1, 1);
@@ -597,19 +644,39 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
         ctx.restore();
     }
     
-    ctx.restore();
+    ctx.restore(); // End Camera Transform
+
+    // Game Over Overlay (Draws on top of everything else in screen space)
+    if (isGameOverRef.current) {
+        ctx.save();
+        // Fade to black
+        ctx.fillStyle = `rgba(0, 0, 0, ${Math.min(gameOverTimerRef.current / 80, 0.8)})`;
+        ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+        
+        // Skull Icon
+        ctx.globalAlpha = Math.min(gameOverTimerRef.current / 50, 1);
+        ctx.font = "80px Arial";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.shadowColor = "black";
+        ctx.shadowBlur = 10;
+        ctx.fillText("💀", CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2);
+        ctx.restore();
+    }
 
     // Draw UI (Hearts) on top of everything (Fixed position)
-    ctx.save();
-    ctx.font = "24px Arial";
-    ctx.fillStyle = "white";
-    ctx.shadowColor = "black";
-    ctx.shadowBlur = 4;
-    // Draw hearts based on lives
-    let hearts = "";
-    for(let i=0; i<livesRef.current; i++) hearts += "❤️ ";
-    ctx.fillText(hearts, 20, 80);
-    ctx.restore();
+    // Hide hearts during game over sequence for cleaner look
+    if (!isGameOverRef.current) {
+        ctx.save();
+        ctx.font = "24px Arial";
+        ctx.fillStyle = "white";
+        ctx.shadowColor = "black";
+        ctx.shadowBlur = 4;
+        let hearts = "";
+        for(let i=0; i<livesRef.current; i++) hearts += "❤️ ";
+        ctx.fillText(hearts, 20, 80);
+        ctx.restore();
+    }
   };
 
   useEffect(() => {

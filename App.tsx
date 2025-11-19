@@ -3,7 +3,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import GameCanvas from './components/GameCanvas';
 import { generateLevel } from './services/geminiService';
 import { GameStatus, LevelConfig, LeaderboardEntry } from './types';
-import { CircleNotch, Trophy, Skull, Play, Pause, Star, Timer, Coin, House, ArrowCounterClockwise, FloppyDisk } from 'phosphor-react';
+import { CircleNotch, Trophy, Skull, Play, Pause, Star, Timer, Coin, House, ArrowCounterClockwise, FloppyDisk, Clock } from 'phosphor-react';
 import { initAudio } from './services/audioService';
 import { MAX_LEADERBOARD_ENTRIES } from './constants';
 
@@ -17,6 +17,8 @@ const App: React.FC = () => {
   // Stats State
   const [score, setScore] = useState(0);
   const [highScore, setHighScore] = useState(0);
+  const [gameTime, setGameTime] = useState(0); // Elapsed time in seconds
+  
   const [lastRunStats, setLastRunStats] = useState({
     time: 0,
     seeds: 0,
@@ -71,6 +73,24 @@ const App: React.FC = () => {
     });
   }, []);
 
+  // Game Timer
+  useEffect(() => {
+    if (status === GameStatus.PLAYING) {
+      const interval = setInterval(() => {
+        const now = Date.now();
+        const elapsed = Math.floor((now - startTimeRef.current - totalPausedTimeRef.current) / 1000);
+        setGameTime(elapsed);
+      }, 1000);
+      return () => clearInterval(interval);
+    }
+  }, [status]);
+
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
   const startGame = async (isNextLevel: boolean = false) => {
     initAudio(); // Initialize Audio Context on user interaction
 
@@ -82,6 +102,7 @@ const App: React.FC = () => {
     
     setStatus(GameStatus.LOADING_LEVEL);
     setSeedsCollected(0);
+    setGameTime(0);
     setLoadingMessage(isNextLevel ? "Scouting deeper territory..." : "Asking Gemini to build the plains...");
     
     // Slight delay for feel or API call
@@ -167,10 +188,6 @@ const App: React.FC = () => {
       setStatus(GameStatus.GAME_OVER);
       
       // Only check leaderboard on death (Game Over), because Victory leads to next level
-      // But user might want to quit after victory? 
-      // Current design: Victory -> Next Level or Quit. 
-      // If Quit is chosen in Victory screen, we should ideally check leaderboard there too.
-      // For simplicity, we'll check qualification here for Game Over.
       if (checkLeaderboardQualification(finalScore)) {
           setIsLeaderboardQualifying(true);
           setPlayerName('');
@@ -237,25 +254,51 @@ const App: React.FC = () => {
           </div>
         </div>
 
-        {/* Right Side HUD */}
+        {/* Right Side HUD - Player Stats */}
         <div className="flex items-center gap-4 pointer-events-auto">
             {(status === GameStatus.PLAYING || status === GameStatus.PAUSED) && (
                <>
-                  <div className="flex items-center gap-2 bg-black/40 p-2 rounded-lg backdrop-blur-md border border-white/10">
-                     <div className="flex flex-col items-end leading-none">
-                        <span className="text-[10px] text-gray-400 uppercase tracking-wider">Score</span>
-                        <span className="font-mono font-bold text-xl">{score.toLocaleString()}</span>
-                     </div>
+                  {/* Stats Panel */}
+                  <div className="flex items-center gap-4 bg-black/60 p-2 rounded-xl backdrop-blur-md border border-white/10 shadow-lg">
+                      
+                      {/* Time */}
+                      <div className="flex items-center gap-2 px-2">
+                          <Clock className="text-blue-400" size={20} weight="fill" />
+                          <div className="flex flex-col leading-none">
+                            <span className="text-[9px] text-gray-400 uppercase font-bold">Time</span>
+                            <span className="font-mono font-bold">{formatTime(gameTime)}</span>
+                          </div>
+                      </div>
+
+                      <div className="w-px h-8 bg-white/10"></div>
+
+                      {/* Seeds */}
+                      <div className="flex items-center gap-2 px-2">
+                          <Coin className="text-amber-400" size={20} weight="fill" />
+                          <div className="flex flex-col leading-none">
+                            <span className="text-[9px] text-gray-400 uppercase font-bold">Seeds</span>
+                            <span className="font-mono font-bold">{seedsCollected}</span>
+                          </div>
+                      </div>
+
+                      <div className="w-px h-8 bg-white/10"></div>
+
+                      {/* Score */}
+                      <div className="flex items-center gap-2 px-2">
+                          <div className="flex flex-col items-end leading-none">
+                             <span className="text-[9px] text-gray-400 uppercase font-bold">Score</span>
+                             <span className="font-mono font-bold text-lg text-emerald-400">{score.toLocaleString()}</span>
+                          </div>
+                      </div>
                   </div>
-                  <div className="bg-amber-500/90 text-black px-4 py-2 rounded-full font-bold shadow-lg flex items-center gap-2 border-2 border-amber-300">
-                    <Coin weight="fill" size={20} /> {seedsCollected}
-                  </div>
+
+                  {/* Pause Button */}
                   <button 
                     onClick={togglePause}
-                    className="bg-white/10 hover:bg-white/20 p-2 rounded-lg backdrop-blur-md border border-white/10 transition-colors"
+                    className="bg-white/10 hover:bg-white/20 p-3 rounded-xl backdrop-blur-md border border-white/10 transition-colors"
                     title={status === GameStatus.PAUSED ? "Resume" : "Pause"}
                   >
-                    {status === GameStatus.PAUSED ? <Play weight="fill" size={24} /> : <Pause weight="fill" size={24} />}
+                    {status === GameStatus.PAUSED ? <Play weight="fill" size={20} /> : <Pause weight="fill" size={20} />}
                   </button>
                </>
             )}
