@@ -107,7 +107,7 @@ export const generateLevel = async (difficulty: number, collectibleDensity: 'low
     8. Add flying enemies: 'hawk' (high up), 'bat' (mid-air patrol), or 'bug' (erratic swarms).
     9. Place 'collectibles' (seeds) - ${densityDescription}.
     10. Place 'shield' collectibles - ${collectibleDensity === 'high' ? 'occasionally' : 'rarely'}.
-    11. Place the 'goal' (burrow) at the far right (approx x=2800) on a safe platform.
+    11. Place 'goal' (burrow) at the far right (approx x=2800) on a safe platform.
     
     Output ONLY valid JSON conforming to the schema.
   `;
@@ -135,8 +135,12 @@ export const generateLevel = async (difficulty: number, collectibleDensity: 'low
     
     let levelConfig = JSON.parse(text) as LevelConfig;
 
-    // --- SANITY CHECKS ---
-    // Ensure there is a platform under the start position
+    // --- SANITY CHECKS & REPAIRS ---
+    
+    // 1. Sort platforms by X for logical processing
+    levelConfig.platforms.sort((a: any, b: any) => a.x - b.x);
+
+    // 2. Safe Start: Ensure there is a platform under the start position
     const startX = 50;
     const hasSafeStart = levelConfig.platforms.some(p => 
         p.x <= startX && 
@@ -153,14 +157,60 @@ export const generateLevel = async (difficulty: number, collectibleDensity: 'low
             h: 50,
             subtype: 'normal'
         });
+        // Re-sort
+        levelConfig.platforms.sort((a: any, b: any) => a.x - b.x);
     }
 
-    // Ensure there is a platform under the goal
+    // 3. Gap Filling (Ground Path Continuity)
+    // Iterate through platforms and ensure that the "ground layer" doesn't have impossible gaps.
+    // We define "ground layer" roughly as y > 300 (since 0 is top).
+    let currentRightEdge = 0;
+    // Initialize right edge based on the first ground platform
+    const firstGround = levelConfig.platforms.find(p => p.y > 300);
+    if (firstGround) currentRightEdge = firstGround.x + firstGround.w;
+
+    // Create a temporary list to add bridge platforms
+    const bridges: any[] = [];
+    const MAX_GAP = 220; // Slightly generous max jump
+
+    for (const p of levelConfig.platforms) {
+        // Only consider platforms that could be part of the "main path"
+        if (p.y < 300) continue; 
+
+        // If this platform starts significantly after our current reach
+        if (p.x > currentRightEdge + MAX_GAP) {
+             // Found a gap! Inject a bridge.
+             const bridgeStart = currentRightEdge + 20;
+             const bridgeW = Math.min(200, p.x - bridgeStart - 20);
+             
+             if (bridgeW > 40) {
+                 bridges.push({
+                    x: bridgeStart,
+                    y: 500 + (Math.random() * 40 - 20), // Varied height
+                    w: bridgeW,
+                    h: 40,
+                    subtype: 'normal'
+                 });
+                 // Extend reach
+                 currentRightEdge = bridgeStart + bridgeW;
+             }
+        }
+        
+        // Update reach if this platform extends it
+        // (Simple logic: if it overlaps or is close enough to jump to, it extends our reach)
+        if (p.x <= currentRightEdge + MAX_GAP) {
+            currentRightEdge = Math.max(currentRightEdge, p.x + p.w);
+        }
+    }
+    levelConfig.platforms.push(...bridges);
+    levelConfig.platforms.sort((a: any, b: any) => a.x - b.x); // Final sort
+
+    // 4. Safe Goal: Ensure there is a platform under the goal
     const goal = levelConfig.goal;
     const hasGoalPlatform = levelConfig.platforms.some(p => 
         p.x <= goal.x && 
         (p.x + p.w) >= goal.x &&
-        Math.abs(p.y - goal.y) < 150 // Within reasonable vertical distance
+        Math.abs(p.y - goal.y) < 150
     );
 
     if (!hasGoalPlatform) {

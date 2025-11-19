@@ -3,11 +3,11 @@ export const GRAVITY = 1.2; // Heavier gravity for less floaty feel
 export const FRICTION = 0.88;
 export const AIR_FRICTION = 0.95; // Less friction in air
 export const JUMP_FORCE = -22; // Stronger jump to counter gravity
-export const MOVE_SPEED = 0.75; // Reduced 50%
+export const MOVE_SPEED = 0.95; // Increased 25%
 export const AIR_CONTROL = 0.5; // Air acceleration multiplier
-export const MAX_SPEED = 4.5; // Reduced 50%
+export const MAX_SPEED = 5.6; // Increased 25%
 export const TERMINAL_VELOCITY = 20;
-export const DASH_SPEED = 15; // Scaled down dash
+export const DASH_SPEED = 19; // Scaled up 25%
 export const DASH_DURATION = 12; // frames
 export const DASH_COOLDOWN = 50; // frames
 

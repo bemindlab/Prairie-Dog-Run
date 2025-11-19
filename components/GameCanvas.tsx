@@ -105,29 +105,31 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
   // Sprite Sheet Generation
   useEffect(() => {
     const generatePrairieDogSpriteSheet = () => {
+      const CELL_SIZE = 128; // Increased resolution for sharpness (was 64)
       const sCanvas = document.createElement('canvas');
-      sCanvas.width = 128;
-      sCanvas.height = 128; // 4 rows of 32x32 sprites
+      sCanvas.width = CELL_SIZE * 4; 
+      sCanvas.height = CELL_SIZE * 4; 
       const ctx = sCanvas.getContext('2d');
       if (!ctx) return null;
 
       const drawFrame = (row: number, col: number, action: (c: CanvasRenderingContext2D) => void) => {
           ctx.save();
-          ctx.translate(col * 32, row * 32);
+          ctx.translate(col * CELL_SIZE, row * CELL_SIZE);
           
           // Clip to cell
           ctx.beginPath();
-          ctx.rect(0, 0, 32, 32);
+          ctx.rect(0, 0, CELL_SIZE, CELL_SIZE);
           ctx.clip();
           
-          // Scale up coordinate system to fit 32x32 conveniently (0-100 range)
-          ctx.scale(0.32, 0.32); 
+          // Scale up coordinate system to fit 128x128 conveniently (0-100 range logic)
+          // 100 units * 1.28 = 128 pixels
+          ctx.scale(1.28, 1.28); 
 
           action(ctx);
           ctx.restore();
       };
 
-      // Common body drawing
+      // Common body drawing (Vector paths remain valid with scaling)
       const drawBody = (c: CanvasRenderingContext2D, legOffset: number, yOffset: number) => {
           // Body
           c.fillStyle = COLORS.player;
@@ -680,7 +682,15 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
       }
 
       // World Bounds (Death Floor) - Immediate Game Over
-      if (player.position.y > level.platforms[0].y + 600) {
+      // Calculate the lowest platform Y to determine death plane. 
+      // Default to height + 400 if no platforms (fallback)
+      let lowestY = height;
+      if (level.platforms.length > 0) {
+          lowestY = Math.max(...level.platforms.map(p => p.y));
+      }
+      const deathY = lowestY + 400;
+
+      if (player.position.y > deathY) {
           if (!isGameOverRef.current) {
               livesRef.current = 0; // Ensure no respawn
               isGameOverRef.current = true; // Trigger game over loop
@@ -934,7 +944,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
           p.vy += 0.15; // Gravity
 
           // Check Bounds
-          if (p.y > level.platforms[0].y + 500) {
+          if (p.y > level.platforms[0]?.y + 500 || p.y > deathY) {
               projectilesRef.current.splice(i, 1);
               continue;
           }
@@ -1125,7 +1135,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
              // Pulsing Shield
              const s = 1 + Math.sin(t) * 0.1;
              ctx.scale(s, s);
-             ctx.font = "30px serif";
+             ctx.font = "48px serif"; // Increased scale
              ctx.textAlign = "center";
              ctx.textBaseline = "middle";
              // Aura
@@ -1139,7 +1149,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
              // Rotation
              ctx.rotate(Math.sin(t/2) * 0.2);
              
-             ctx.font = "24px serif";
+             ctx.font = "36px serif"; // Increased scale
              ctx.textAlign = "center";
              ctx.textBaseline = "middle";
              ctx.shadowColor = "gold";
@@ -1162,7 +1172,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
         const isFacingLeft = e.velocity && e.velocity.x < 0;
         if (!isFacingLeft) ctx.scale(-1, 1);
 
-        ctx.font = "32px serif";
+        ctx.font = "48px serif"; // Increased scale
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
 
@@ -1170,7 +1180,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
             if (e.aiState === 'angry') {
                 ctx.fillText("🐍", 0, 0);
                 // Angry emote
-                ctx.font = "12px serif";
+                ctx.font = "24px serif";
                 ctx.fillText("💢", 0, -25);
             } else {
                 ctx.fillText("🐍", 0, 0);
@@ -1219,7 +1229,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
                 // Dirt Pile
                 ctx.fillStyle = '#5D4037';
                 ctx.beginPath();
-                ctx.ellipse(0, 20, 20, 8, 0, 0, Math.PI*2);
+                ctx.ellipse(0, 20, 20, 8, 0, 0, Math.PI * 2);
                 ctx.fill();
 
                 // Mole body
@@ -1235,7 +1245,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
                     ctx.translate(0, yOff);
                     ctx.fillText("🥔", 0, 0);
                     // Face
-                    ctx.font = "12px monospace";
+                    ctx.font = "16px monospace";
                     // Eyes tracking
                     const dx = player.position.x - e.position.x;
                     const eyeOff = Math.sign(dx) * 2;
@@ -1259,9 +1269,10 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
         
         ctx.fillStyle = p.color;
         ctx.beginPath();
-        // Teardrop shape
-        ctx.arc(0, 0, p.size, Math.PI/2, -Math.PI/2);
-        ctx.lineTo(-p.size*2, 0);
+        // Teardrop shape (Scaled up 1.5x)
+        const visualSize = p.size * 1.5;
+        ctx.arc(0, 0, visualSize, Math.PI/2, -Math.PI/2);
+        ctx.lineTo(-visualSize*2, 0);
         ctx.fill();
         
         ctx.restore();
@@ -1323,8 +1334,8 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
 
         // Render Sprite
         if (spriteSheet) {
-            const spriteSize = 32; // Source size
-            const renderSize = 64; // Target size (scaled up 2x visual)
+            const spriteSize = 128; // Source size (Upscaled to match CELL_SIZE)
+            const renderSize = 100; // Target size (Upscaled)
             
             // Determine row/col
             // 0:Idle, 1:Run, 2:Jump, 3:Walk
@@ -1348,7 +1359,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
             // Draw Image
             // Offset to center the sprite visually within the physics box
             const xOff = -renderSize / 2; 
-            const yOff = -renderSize / 2 - 5; 
+            const yOff = -renderSize / 2 - 15; // Adjusted yOff for larger sprite
 
             ctx.drawImage(
                 spriteSheet,
@@ -1370,21 +1381,15 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
 
     // --- HUD / Overlays ---
     
-    // Lives
-    ctx.font = "24px sans-serif";
-    ctx.textAlign = "left";
-    ctx.textBaseline = "top";
-    let lifeStr = "";
-    for(let i=0; i<livesRef.current; i++) lifeStr += "❤️";
-    ctx.fillStyle = "white";
-    // ctx.fillText(lifeStr, 20, 80); // Handled by DOM UI now, but can keep as backup
-
-    // Game Over Screen specific rendering
+    // Lives (Rendered via React Overlay now)
+    
+    // Game Over Screen specific rendering (Internal fade)
     if (isGameOverRef.current) {
-        ctx.fillStyle = `rgba(0, 0, 0, ${Math.min(0.8, gameOverTimerRef.current / 60)})`;
+        ctx.fillStyle = `rgba(0, 0, 0, ${Math.min(1.0, gameOverTimerRef.current / 60)})`;
         ctx.fillRect(0, 0, width, height);
         
-        ctx.font = "100px serif";
+        const skullSize = Math.min(width, height) / 4;
+        ctx.font = `${skullSize}px serif`;
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
         ctx.fillText("💀", width/2, height/2);
@@ -1462,44 +1467,4 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ level, status, onGameOver, onCo
                             className={`w-14 h-14 backdrop-blur-md rounded-full border-2 flex items-center justify-center text-2xl shadow-lg transition-all ${
                                 dashCooldownRef.current <= 0 
                                 ? 'bg-cyan-500/40 border-cyan-300/50 active:bg-cyan-500/60 text-white' 
-                                : 'bg-gray-500/40 border-gray-500/50 opacity-50'
-                            }`}
-                            onTouchStart={(e) => { 
-                                e.preventDefault(); 
-                                inputRef.current.dashPressed = true;
-                            }}
-                            onTouchEnd={(e) => { e.preventDefault(); inputRef.current.dashPressed = false; }}
-                        >
-                           <Wind weight="fill" />
-                        </button>
-
-                        {/* Jump Btn */}
-                        <button 
-                            className="w-20 h-20 bg-amber-500/40 backdrop-blur-md rounded-full border-2 border-amber-300/50 active:bg-amber-500/60 flex items-center justify-center text-3xl shadow-lg"
-                            onTouchStart={(e) => { 
-                                e.preventDefault(); 
-                                inputRef.current.up = true;
-                                inputRef.current.jumpPressed = true;
-                            }}
-                            onTouchEnd={(e) => { 
-                                e.preventDefault(); 
-                                inputRef.current.up = false;
-                            }}
-                        >
-                           🦘
-                        </button>
-                    </div>
-                </div>
-                
-                {/* Portrait Mode Hint */}
-                <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 opacity-30 pointer-events-none animate-pulse hidden portrait:flex flex-col items-center text-black/50">
-                     <DeviceMobile size={48} className="rotate-90" />
-                     <span className="text-xs font-bold">Landscape Recommended</span>
-                </div>
-            </div>
-        )}
-    </div>
-  );
-};
-
-export default React.memo(GameCanvas);
+                                : 'bg-gray-500/40 border-gray-500/5
