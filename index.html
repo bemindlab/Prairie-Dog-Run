@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>Prairie Dog Run</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -11,6 +11,20 @@
         user-select: none;
         -webkit-user-select: none;
         touch-action: none;
+      }
+      /* Custom scrollbar for leaderboards */
+      ::-webkit-scrollbar {
+        width: 8px;
+      }
+      ::-webkit-scrollbar-track {
+        background: rgba(0, 0, 0, 0.2);
+      }
+      ::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.2);
+        border-radius: 4px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: rgba(255, 255, 255, 0.3);
       }
     </style>
   <script type="importmap">
@@ -25,7 +39,7 @@
 }
 </script>
 </head>
-  <body class="bg-sky-200 overflow-hidden">
+  <body class="bg-gray-900 overflow-hidden overscroll-none">
     <div id="root"></div>
   </body>
 </html>

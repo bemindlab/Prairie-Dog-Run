@@ -1,18 +1,32 @@
-export const GRAVITY = 0.6;
-export const FRICTION = 0.92;
-export const JUMP_FORCE = -14;
-export const MOVE_SPEED = 2.0; // Acceleration
-export const MAX_SPEED = 12;
-export const TERMINAL_VELOCITY = 15;
+
+export const GRAVITY = 1.2; // Heavier gravity for less floaty feel
+export const FRICTION = 0.88;
+export const AIR_FRICTION = 0.95; // Less friction in air
+export const JUMP_FORCE = -22; // Stronger jump to counter gravity
+export const MOVE_SPEED = 0.75; // Reduced 50%
+export const AIR_CONTROL = 0.5; // Air acceleration multiplier
+export const MAX_SPEED = 4.5; // Reduced 50%
+export const TERMINAL_VELOCITY = 20;
+export const DASH_SPEED = 15; // Scaled down dash
+export const DASH_DURATION = 12; // frames
+export const DASH_COOLDOWN = 50; // frames
 
 export const PLAYER_WIDTH = 40;
 export const PLAYER_HEIGHT = 40;
+
+export const SHIELD_DURATION = 600; // 10 seconds at 60fps
 
 export const CANVAS_WIDTH = 1024;
 export const CANVAS_HEIGHT = 600;
 
 export const GENERATION_MODEL = 'gemini-2.5-flash';
 export const MAX_LEADERBOARD_ENTRIES = 5;
+
+export const TIME_LIMITS = {
+  1: 240, // Easy
+  2: 180, // Medium
+  3: 120  // Hard
+};
 
 // Colors for fallback rendering
 export const COLORS = {
